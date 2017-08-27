@@ -9,22 +9,28 @@ import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredenti
 import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
 import com.google.common.base.Preconditions;
 import edu.umd.cs.findbugs.annotations.NonNull;
-import hudson.*;
+import hudson.Extension;
+import hudson.Util;
 import hudson.model.AbstractProject;
+import hudson.model.Action;
+import hudson.model.JobProperty;
+import hudson.model.JobPropertyDescriptor;
 import hudson.model.Label;
-import hudson.model.Run;
-import hudson.model.TaskListener;
 import hudson.security.ACL;
-import hudson.tasks.BuildWrapperDescriptor;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import jenkins.model.Jenkins;
-import jenkins.tasks.SimpleBuildWrapper;
+import net.sf.json.JSONObject;
+import org.apache.commons.lang.RandomStringUtils;
+import org.apache.commons.lang.StringUtils;
+import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesCloudBuildWrapper;
+import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesLabelAssignmentAction;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
+import org.kohsuke.stapler.StaplerRequest;
 
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
@@ -32,18 +38,21 @@ import javax.servlet.ServletException;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static java.lang.String.format;
 import static org.apache.commons.lang.StringUtils.isBlank;
 
-public class KubernetesBuildWrapper extends SimpleBuildWrapper {
+public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
 
     public static final int DEFAULT_MAX_REQUESTS_PER_HOST = 32;
-    private static final Logger LOGGER = Logger.getLogger(KubernetesBuildWrapper.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(KubernetesProperty.class.getName());
+    private static final String PROPERTYNAME = "kubernetes_label_assignment";
     private static final int DEFAULT_RETENTION_TIMEOUT_MINUTES = 5;
     private static final transient String NAME_FORMAT = "%s-%s";
+    private static final String DEFAULT_AGENT_PREFIX = "jenkins-agent";
     private String name;
     private String defaultsProviderTemplate;
     private PodTemplate template;
@@ -64,11 +73,11 @@ public class KubernetesBuildWrapper extends SimpleBuildWrapper {
     private int maxRequestsPerHost;
 
     @DataBoundConstructor
-    public KubernetesBuildWrapper(String name) {
+    public KubernetesProperty(String name) {
         this.name = name;
     }
 
-    public KubernetesBuildWrapper(@NonNull KubernetesBuildWrapper source) {
+    public KubernetesProperty(@NonNull KubernetesProperty source) {
         this.name = source.name;
         this.defaultsProviderTemplate = source.defaultsProviderTemplate;
         this.template = source.template;
@@ -229,17 +238,50 @@ public class KubernetesBuildWrapper extends SimpleBuildWrapper {
         this.connectTimeout = connectTimeout;
     }
 
-    @Extension
-    public static class DescriptorImpl extends BuildWrapperDescriptor {
+    public boolean assignLabel(final AbstractProject<?, ?> project, final List<Action> actions) {
+        template.setName(getSlaveName(template.getName()));
+        KubernetesCloudBuildWrapper cloud = new KubernetesCloudBuildWrapper(name, Arrays.asList(template), serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
+        cloud.provision(Label.get(template.getLabel()), 1);
 
-        @Override
-        public boolean isApplicable(AbstractProject<?, ?> item) {
-            return true;
+        actions.add(0, new KubernetesLabelAssignmentAction(template.getName()));
+        return true;
+    }
+
+    static String getSlaveName(String name) {
+        String randString = RandomStringUtils.random(5, "bcdfghjklmnpqrstvwxz0123456789");
+        if (StringUtils.isEmpty(name)) {
+            return String.format("%s-%s", DEFAULT_AGENT_PREFIX, randString);
         }
+        // no spaces
+        name = name.replaceAll("[ _]", "-").toLowerCase();
+        // keep it under 63 chars (62 is used to account for the '-')
+        name = name.substring(0, Math.min(name.length(), 62 - randString.length()));
+        return String.format("%s-%s", name, randString);
+    }
+
+    @Extension
+    public static class DescriptorImpl extends JobPropertyDescriptor {
 
         @Override
         public String getDisplayName() {
             return "Kubernetes Build Image";
+        }
+
+        @Override
+        public JobProperty<?> newInstance(final StaplerRequest req, final JSONObject formData) throws FormException {
+            super.newInstance(req, formData);
+            if (formData.isNullObject()) {
+                return null;
+            }
+
+            JSONObject form = formData.getJSONObject(PROPERTYNAME);
+            if (form == null || form.isNullObject()) {
+                return null;
+            }
+
+            @SuppressWarnings("unchecked")
+            Class<? extends KubernetesProperty> clazz = (Class<? extends KubernetesProperty>) getClass().getEnclosingClass();
+            return req.bindJSON(clazz, form);
         }
 
         @SuppressWarnings("all")
@@ -308,24 +350,6 @@ public class KubernetesBuildWrapper extends SimpleBuildWrapper {
 
     @Override
     public String toString() {
-        return format("KubernetesBuildWrapper name: %s serverUrl: %s", name, serverUrl);
-    }
-
-    @Override
-    public void setUp(Context context, Run<?, ?> build, FilePath workspace, Launcher launcher, TaskListener listener, EnvVars initialEnvironment) throws IOException, InterruptedException {
-        KubernetesCloud cloud = new KubernetesCloud(name, Arrays.asList(template), serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
-        cloud.provision(Label.get(template.getName()), 1);
-//
-//        try {
-//            KubernetesClient client = cloud.connect();
-//            Boolean deleted = client.pods().withName(template.getName()).delete();
-//            if (!Boolean.TRUE.equals(deleted)) {
-//                LOGGER.log(Level.WARNING, "Failed to delete pod for agent {0}/{1}: not found",
-//                        new String[]{client.getNamespace(), template.getName()});
-//                return;
-//            }
-//        } catch (Exception e) {
-//            LOGGER.log(Level.FINE, "error", e);
-//        }
+        return format("KubernetesProperty name: %s serverUrl: %s", name, serverUrl);
     }
 }

@@ -143,7 +143,7 @@ public class PodTemplateUtils {
      * @param allTemplates               A collection of all the known templates
      * @return
      */
-    static PodTemplate unwrap(PodTemplate template, String defaultProviderTemplate, Collection<PodTemplate> allTemplates) {
+    public static PodTemplate unwrap(PodTemplate template, String defaultProviderTemplate, Collection<PodTemplate> allTemplates) {
         if (template == null) {
             return null;
         }
