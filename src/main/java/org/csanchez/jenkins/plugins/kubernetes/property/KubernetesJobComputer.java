@@ -7,11 +7,11 @@ import hudson.slaves.AbstractCloudComputer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class KubernetesComputerProperty extends AbstractCloudComputer<KubernetesSlaveProperty> {
+public class KubernetesJobComputer extends AbstractCloudComputer<KubernetesJobSlave> {
 
-    private static final Logger LOGGER = Logger.getLogger(KubernetesComputerProperty.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(KubernetesJobComputer.class.getName());
 
-    public KubernetesComputerProperty(KubernetesSlaveProperty slave) {
+    public KubernetesJobComputer(KubernetesJobSlave slave) {
         super(slave);
     }
 

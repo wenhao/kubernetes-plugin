@@ -90,9 +90,9 @@ import static org.apache.commons.lang.StringUtils.isNotBlank;
 import static org.csanchez.jenkins.plugins.kubernetes.KubernetesCloud.JNLP_NAME;
 import static org.csanchez.jenkins.plugins.kubernetes.PodTemplateUtils.substituteEnv;
 
-class ProvisioningCallbackProperty implements Callable<Node> {
+class KubernetesProvisioningCallback implements Callable<Node> {
 
-    private static final Logger LOGGER = Logger.getLogger(ProvisioningCallbackProperty.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(KubernetesProvisioningCallback.class.getName());
 
     private static final Pattern SPLIT_IN_SPACES = Pattern.compile("([^\"]\\S*|\".+?\")\\s*");
     private static final String WORKSPACE_VOLUME_NAME = "workspace-volume";
@@ -102,20 +102,20 @@ class ProvisioningCallbackProperty implements Callable<Node> {
     private static final String NAME_REF = "\\$\\{computer.name\\}";
 
     @Nonnull
-    private final KubernetesCloudProperty cloud;
+    private final KubernetesJobCloud cloud;
     @Nonnull
     private final PodTemplate template;
 
-    public ProvisioningCallbackProperty(@Nonnull KubernetesCloudProperty cloud, @Nonnull PodTemplate template) {
+    public KubernetesProvisioningCallback(@Nonnull KubernetesJobCloud cloud, @Nonnull PodTemplate template) {
         this.cloud = cloud;
         this.template = template;
     }
 
     public Node call() throws Exception {
-        KubernetesSlaveProperty slave = null;
+        KubernetesJobSlave slave = null;
         RetentionStrategy retentionStrategy = template.getIdleMinutes() == 0 ? new OnceRetentionStrategy(cloud.getRetentionTimeout()) : new CloudRetentionStrategy(template.getIdleMinutes());
         try {
-            slave = new KubernetesSlaveProperty(template, template.getName(), cloud, template.getLabel(), retentionStrategy);
+            slave = new KubernetesJobSlave(template, template.getName(), cloud, template.getLabel(), retentionStrategy);
             LOGGER.log(Level.FINER, "Adding Jenkins node: {0}", slave.getNodeName());
             Jenkins.getInstance().addNode(slave);
 
@@ -214,7 +214,7 @@ class ProvisioningCallbackProperty implements Callable<Node> {
     /**
      * Log the last lines of containers logs
      */
-    private void logLastLines(List<ContainerStatus> containers, String podId, String namespace, KubernetesSlaveProperty slave,
+    private void logLastLines(List<ContainerStatus> containers, String podId, String namespace, KubernetesJobSlave slave,
                               Map<String, Integer> errors) {
         for (ContainerStatus containerStatus : containers) {
             String containerName = containerStatus.getName();
@@ -234,7 +234,7 @@ class ProvisioningCallbackProperty implements Callable<Node> {
         }
     }
 
-    private Container createContainer(KubernetesSlaveProperty slave, ContainerTemplate containerTemplate, Collection<TemplateEnvVar> globalEnvVars, Collection<VolumeMount> volumeMounts) {
+    private Container createContainer(KubernetesJobSlave slave, ContainerTemplate containerTemplate, Collection<TemplateEnvVar> globalEnvVars, Collection<VolumeMount> volumeMounts) {
         // Last-write wins map of environment variable names to values
         HashMap<String, String> env = new HashMap<>();
 
@@ -334,7 +334,7 @@ class ProvisioningCallbackProperty implements Callable<Node> {
     }
 
 
-    private Pod getPodTemplate(KubernetesSlaveProperty slave, PodTemplate template) {
+    private Pod getPodTemplate(KubernetesJobSlave slave, PodTemplate template) {
         if (isNull(template)) {
             return null;
         }

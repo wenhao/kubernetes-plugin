@@ -22,7 +22,7 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import jenkins.model.Jenkins;
 import net.sf.json.JSONObject;
-import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesCloudProperty;
+import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesJobCloud;
 import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesLabelAssignmentAction;
 import org.csanchez.jenkins.plugins.kubernetes.property.SlaveNameUtils;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -90,8 +90,8 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
     public boolean assignLabel(final AbstractProject<?, ?> project, final List<Action> actions) {
         String slaveName = SlaveNameUtils.getSlaveName(template.getName());
         template.setName(slaveName);
-        KubernetesCloudProperty kubernetesCloudProperty = new KubernetesCloudProperty(name, template, serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
-        kubernetesCloudProperty.provision(Label.get(template.getLabel()), 1);
+        KubernetesJobCloud kubernetesJobCloud = new KubernetesJobCloud(name, template, serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
+        kubernetesJobCloud.provision(Label.get(template.getLabel()), 1);
         actions.add(0, new KubernetesLabelAssignmentAction(slaveName));
         return true;
     }
