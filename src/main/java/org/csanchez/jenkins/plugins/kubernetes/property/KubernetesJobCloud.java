@@ -69,6 +69,7 @@ public class KubernetesJobCloud extends Cloud {
     private static final int DEFAULT_RETENTION_TIMEOUT_MINUTES = 5;
     private String defaultsProviderTemplate;
     private PodTemplate template;
+    private String slaveName;
     private String serverUrl;
     @CheckForNull
     private String serverCertificate;
@@ -86,17 +87,14 @@ public class KubernetesJobCloud extends Cloud {
     private int maxRequestsPerHost;
 
     @DataBoundConstructor
-    public KubernetesJobCloud(String name) {
-        super(name);
-    }
-
-    public KubernetesJobCloud(String name, PodTemplate template, String serverUrl, String namespace, String jenkinsUrl, String containerCapStr, int connectTimeout, int readTimeout, int retentionTimeout) {
-        this(name);
+    public KubernetesJobCloud(final String cloudName, final PodTemplate template, final String slaveName, final String serverUrl, final String namespace, final String jenkinsUrl, final int containerCap, final int connectTimeout, final int readTimeout, final int retentionTimeout) {
+        super(cloudName);
         this.template = template;
+        this.slaveName = slaveName;
+        this.containerCap = containerCap;
         setServerUrl(serverUrl);
         setNamespace(namespace);
         setJenkinsUrl(jenkinsUrl);
-        setContainerCapStr(containerCapStr);
         setRetentionTimeout(retentionTimeout);
         setConnectTimeout(connectTimeout);
         setReadTimeout(readTimeout);
@@ -111,7 +109,7 @@ public class KubernetesJobCloud extends Cloud {
             if (!addProvisionedSlave(template, label)) {
                 return ImmutableList.of();
             }
-            return newArrayList(new PlannedNode(template.getDisplayName(), Computer.threadPoolForRemoting.submit(new KubernetesProvisioningCallback(this, template)), 1));
+            return newArrayList(new PlannedNode(template.getDisplayName(), Computer.threadPoolForRemoting.submit(new KubernetesProvisioningCallback(this, template, slaveName)), 1));
         } catch (KubernetesClientException e) {
             Throwable cause = e.getCause();
             if (cause instanceof SocketTimeoutException || cause instanceof ConnectException || cause instanceof UnknownHostException) {
@@ -384,6 +382,23 @@ public class KubernetesJobCloud extends Cloud {
         return readTimeout;
     }
 
+    @DataBoundSetter
+    public void setSlaveName(final String slaveName) {
+        this.slaveName = slaveName;
+    }
+
+    @DataBoundSetter
+    public void setContainerCap(final int containerCap) {
+        this.containerCap = containerCap;
+    }
+
+    @DataBoundSetter
+    public void setMaxRequestsPerHost(final int maxRequestsPerHost) {
+        this.maxRequestsPerHost = maxRequestsPerHost;
+    }
+
+    @DataBoundSetter
+
     public void setReadTimeout(int readTimeout) {
         this.readTimeout = readTimeout;
     }
@@ -405,6 +420,7 @@ public class KubernetesJobCloud extends Cloud {
         return String.valueOf(maxRequestsPerHost);
     }
 
+    @DataBoundSetter
     public void setConnectTimeout(int connectTimeout) {
         this.connectTimeout = connectTimeout;
     }

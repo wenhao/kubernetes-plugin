@@ -56,6 +56,7 @@ import org.csanchez.jenkins.plugins.kubernetes.ContainerTemplate;
 import org.csanchez.jenkins.plugins.kubernetes.PodAnnotation;
 import org.csanchez.jenkins.plugins.kubernetes.PodImagePullSecret;
 import org.csanchez.jenkins.plugins.kubernetes.PodTemplate;
+import org.csanchez.jenkins.plugins.kubernetes.PortMapping;
 import org.csanchez.jenkins.plugins.kubernetes.model.TemplateEnvVar;
 import org.csanchez.jenkins.plugins.kubernetes.pipeline.PodTemplateStepExecution;
 import org.csanchez.jenkins.plugins.kubernetes.volumes.PodVolume;
@@ -105,17 +106,19 @@ class KubernetesProvisioningCallback implements Callable<Node> {
     private final KubernetesJobCloud cloud;
     @Nonnull
     private final PodTemplate template;
+    private String slaveName;
 
-    public KubernetesProvisioningCallback(@Nonnull KubernetesJobCloud cloud, @Nonnull PodTemplate template) {
+    public KubernetesProvisioningCallback(@Nonnull KubernetesJobCloud cloud, @Nonnull PodTemplate template, final String slaveName) {
         this.cloud = cloud;
         this.template = template;
+        this.slaveName = slaveName;
     }
 
     public Node call() throws Exception {
         KubernetesJobSlave slave = null;
         RetentionStrategy retentionStrategy = template.getIdleMinutes() == 0 ? new OnceRetentionStrategy(cloud.getRetentionTimeout()) : new CloudRetentionStrategy(template.getIdleMinutes());
         try {
-            slave = new KubernetesJobSlave(template, template.getName(), cloud, template.getLabel(), retentionStrategy);
+            slave = new KubernetesJobSlave(template, slaveName, cloud, template.getLabel(), retentionStrategy);
             LOGGER.log(Level.FINER, "Adding Jenkins node: {0}", slave.getNodeName());
             Jenkins.getInstance().addNode(slave);
 
@@ -291,7 +294,7 @@ class KubernetesProvisioningCallback implements Callable<Node> {
 
         List<VolumeMount> containerMounts = new ArrayList<>(volumeMounts);
 
-        ContainerPort[] ports = containerTemplate.getPorts().stream().map(entry -> entry.toPort()).toArray(size -> new ContainerPort[size]);
+        ContainerPort[] ports = containerTemplate.getPorts().stream().map(PortMapping::toPort).toArray(ContainerPort[]::new);
 
         if (!isNullOrEmpty(containerTemplate.getWorkingDir())
                 && !PodVolume.volumeMountExists(containerTemplate.getWorkingDir(), volumeMounts)) {

@@ -2,7 +2,7 @@ package org.csanchez.jenkins.plugins.kubernetes.property;
 
 import hudson.Extension;
 import hudson.model.Computer;
-import hudson.model.Descriptor;
+import hudson.model.Descriptor.FormException;
 import hudson.model.TaskListener;
 import hudson.slaves.AbstractCloudSlave;
 import hudson.slaves.Cloud;
@@ -35,19 +35,15 @@ public class KubernetesJobSlave extends AbstractCloudSlave {
     private final String namespace;
     private KubernetesJobCloud kubernetesJobCloud;
 
-    public KubernetesJobSlave(PodTemplate template, String nodeDescription, KubernetesJobCloud kubernetesJobCloud, String labelStr, RetentionStrategy retentionStrategy) throws Descriptor.FormException, IOException {
-        this(template, nodeDescription, labelStr, retentionStrategy);
+    public KubernetesJobSlave(PodTemplate template, String slaveName, KubernetesJobCloud kubernetesJobCloud, String labelStr, RetentionStrategy retentionStrategy) throws FormException, IOException {
+        this(template, slaveName, labelStr, retentionStrategy);
         this.kubernetesJobCloud = kubernetesJobCloud;
     }
 
     @DataBoundConstructor
-    public KubernetesJobSlave(PodTemplate template, String nodeDescription, String labelStr, RetentionStrategy retentionStrategy) throws Descriptor.FormException, IOException {
-        super(template.getName(), nodeDescription, template.getRemoteFs(), 1, template.getNodeUsageMode() != null ? template.getNodeUsageMode() : Mode.NORMAL, labelStr, new JNLPLauncher(), retentionStrategy, template.getNodeProperties());
+    public KubernetesJobSlave(PodTemplate template, String slaveName, String labelStr, RetentionStrategy retentionStrategy) throws FormException, IOException {
+        super(slaveName, slaveName, template.getRemoteFs(), 1, template.getNodeUsageMode() != null ? template.getNodeUsageMode() : Mode.NORMAL, labelStr, new JNLPLauncher(), retentionStrategy, template.getNodeProperties());
         this.namespace = fixEmpty(template.getNamespace());
-    }
-
-    public Cloud getKubernetesJobCloud() {
-        return this.kubernetesJobCloud;
     }
 
     @Override

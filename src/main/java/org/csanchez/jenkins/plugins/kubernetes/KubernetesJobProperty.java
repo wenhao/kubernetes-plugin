@@ -8,7 +8,6 @@ import com.cloudbees.plugins.credentials.common.StandardListBoxModel;
 import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
 import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
 import com.google.common.base.Preconditions;
-import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
@@ -49,7 +48,7 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
     private static final Logger LOGGER = Logger.getLogger(KubernetesJobProperty.class.getName());
     private static final String PROPERTYNAME = "kubernetes_label_assignment";
     private static final int DEFAULT_RETENTION_TIMEOUT_MINUTES = 5;
-    private String name;
+    private String cloudName;
     private String defaultsProviderTemplate;
     private PodTemplate template;
     private String serverUrl;
@@ -70,27 +69,12 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
 
     @DataBoundConstructor
     public KubernetesJobProperty(String name) {
-        this.name = name;
-    }
-
-    public KubernetesJobProperty(@NonNull KubernetesJobProperty source) {
-        this.name = source.name;
-        this.defaultsProviderTemplate = source.defaultsProviderTemplate;
-        this.template = source.template;
-        this.serverUrl = source.serverUrl;
-        this.skipTlsVerify = source.skipTlsVerify;
-        this.namespace = source.namespace;
-        this.jenkinsUrl = source.jenkinsUrl;
-        this.credentialsId = source.credentialsId;
-        this.containerCap = source.containerCap;
-        this.retentionTimeout = source.retentionTimeout;
-        this.connectTimeout = source.connectTimeout;
+        this.cloudName = name;
     }
 
     public boolean assignLabel(final AbstractProject<?, ?> project, final List<Action> actions) {
         String slaveName = SlaveNameUtils.getSlaveName(template.getName());
-        template.setName(slaveName);
-        KubernetesJobCloud kubernetesJobCloud = new KubernetesJobCloud(name, template, serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
+        KubernetesJobCloud kubernetesJobCloud = new KubernetesJobCloud(cloudName, template, slaveName, serverUrl, namespace, jenkinsUrl, containerCap, connectTimeout, readTimeout, retentionTimeout);
         kubernetesJobCloud.provision(Label.get(template.getLabel()), 1);
         actions.add(0, new KubernetesLabelAssignmentAction(slaveName));
         return true;
@@ -185,7 +169,7 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
 
     @Override
     public String toString() {
-        return format("KubernetesJobProperty name: %s serverUrl: %s", name, serverUrl);
+        return format("KubernetesJobProperty name: %s serverUrl: %s", cloudName, serverUrl);
     }
 
     public int getRetentionTimeout() {
@@ -254,8 +238,23 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
         this.namespace = namespace;
     }
 
-    public String getName() {
-        return name;
+    @DataBoundSetter
+    public void setCloudName(final String cloudName) {
+        this.cloudName = cloudName;
+    }
+
+    @DataBoundSetter
+    public void setContainerCap(final int containerCap) {
+        this.containerCap = containerCap;
+    }
+
+    @DataBoundSetter
+    public void setMaxRequestsPerHost(final int maxRequestsPerHost) {
+        this.maxRequestsPerHost = maxRequestsPerHost;
+    }
+
+    public String getCloudName() {
+        return cloudName;
     }
 
     public String getJenkinsUrl() {
@@ -310,6 +309,7 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
         return readTimeout;
     }
 
+    @DataBoundSetter
     public void setReadTimeout(int readTimeout) {
         this.readTimeout = readTimeout;
     }
@@ -331,6 +331,7 @@ public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
         return String.valueOf(maxRequestsPerHost);
     }
 
+    @DataBoundSetter
     public void setConnectTimeout(int connectTimeout) {
         this.connectTimeout = connectTimeout;
     }

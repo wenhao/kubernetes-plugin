@@ -1,7 +1,7 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form" xmlns:c="/lib/credentials">
     <f:optionalBlock name="kubernetes_label_assignment" title="${%Kubernetes to restrict where this project can be run}" checked="${instance != null}">
-        <f:entry title="${%Name}" field="name">
+        <f:entry title="${%Name}" field="cloudName">
           <f:textbox default="kubernetes" clazz="required"/>
         </f:entry>
 
