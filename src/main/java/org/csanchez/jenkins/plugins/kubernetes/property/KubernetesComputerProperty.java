@@ -7,13 +7,11 @@ import hudson.slaves.AbstractCloudComputer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * @author Carlos Sanchez carlos@apache.org
- */
-public class KubernetesComputerBuildWrapper extends AbstractCloudComputer<KubernetesSlaveBuildWrapper> {
-    private static final Logger LOGGER = Logger.getLogger(KubernetesComputerBuildWrapper.class.getName());
+public class KubernetesComputerProperty extends AbstractCloudComputer<KubernetesSlaveProperty> {
 
-    public KubernetesComputerBuildWrapper(KubernetesSlaveBuildWrapper slave) {
+    private static final Logger LOGGER = Logger.getLogger(KubernetesComputerProperty.class.getName());
+
+    public KubernetesComputerProperty(KubernetesSlaveProperty slave) {
         super(slave);
     }
 
@@ -26,9 +24,6 @@ public class KubernetesComputerBuildWrapper extends AbstractCloudComputer<Kubern
     @Override
     public void taskCompleted(Executor executor, Queue.Task task, long durationMS) {
         LOGGER.log(Level.FINE, " Computer " + this + " taskCompleted");
-
-        // May take the slave offline and remove it, in which case getNode()
-        // above would return null and we'd not find our DockerSlave anymore.
         super.taskCompleted(executor, task, durationMS);
     }
 

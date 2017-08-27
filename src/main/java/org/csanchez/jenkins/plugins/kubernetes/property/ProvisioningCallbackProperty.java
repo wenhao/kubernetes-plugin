@@ -24,11 +24,9 @@
 
 package org.csanchez.jenkins.plugins.kubernetes.property;
 
-import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import hudson.model.Label;
 import hudson.model.Node;
 import hudson.slaves.CloudRetentionStrategy;
 import hudson.slaves.RetentionStrategy;
@@ -56,8 +54,8 @@ import org.apache.commons.lang.StringUtils;
 import org.csanchez.jenkins.plugins.kubernetes.ContainerLivenessProbe;
 import org.csanchez.jenkins.plugins.kubernetes.ContainerTemplate;
 import org.csanchez.jenkins.plugins.kubernetes.PodAnnotation;
+import org.csanchez.jenkins.plugins.kubernetes.PodImagePullSecret;
 import org.csanchez.jenkins.plugins.kubernetes.PodTemplate;
-import org.csanchez.jenkins.plugins.kubernetes.PodTemplateUtils;
 import org.csanchez.jenkins.plugins.kubernetes.model.TemplateEnvVar;
 import org.csanchez.jenkins.plugins.kubernetes.pipeline.PodTemplateStepExecution;
 import org.csanchez.jenkins.plugins.kubernetes.volumes.PodVolume;
@@ -65,7 +63,6 @@ import org.jenkinsci.plugins.durabletask.executors.OnceRetentionStrategy;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 
-import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 import java.io.IOException;
 import java.nio.file.Paths;
@@ -86,73 +83,52 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.util.Objects.isNull;
+import static java.util.Objects.nonNull;
+import static org.apache.commons.lang.StringUtils.isNotBlank;
 import static org.csanchez.jenkins.plugins.kubernetes.KubernetesCloud.JNLP_NAME;
 import static org.csanchez.jenkins.plugins.kubernetes.PodTemplateUtils.substituteEnv;
 
-/**
- * Callback for Kubernetes cloud provision
- *
- * @since 0.13
- */
-class ProvisioningCallbackBuildWrapper implements Callable<Node> {
+class ProvisioningCallbackProperty implements Callable<Node> {
 
-    private static final Logger LOGGER = Logger.getLogger(ProvisioningCallbackBuildWrapper.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(ProvisioningCallbackProperty.class.getName());
 
     private static final Pattern SPLIT_IN_SPACES = Pattern.compile("([^\"]\\S*|\".+?\")\\s*");
-
     private static final String WORKSPACE_VOLUME_NAME = "workspace-volume";
-
     private static final String DEFAULT_JNLP_ARGUMENTS = "${computer.jnlpmac} ${computer.name}";
-
-    private static final String DEFAULT_JNLP_IMAGE = System
-            .getProperty(PodTemplateStepExecution.class.getName() + ".defaultImage", "jenkinsci/jnlp-slave:alpine");
-
+    private static final String DEFAULT_JNLP_IMAGE = System.getProperty(PodTemplateStepExecution.class.getName() + ".defaultImage", "jenkinsci/jnlp-slave:alpine");
     private static final String JNLPMAC_REF = "\\$\\{computer.jnlpmac\\}";
     private static final String NAME_REF = "\\$\\{computer.name\\}";
 
     @Nonnull
-    private final KubernetesCloudBuildWrapper cloud;
+    private final KubernetesCloudProperty cloud;
     @Nonnull
-    private final PodTemplate t;
-    @CheckForNull
-    private final Label label;
+    private final PodTemplate template;
 
-    public ProvisioningCallbackBuildWrapper(@Nonnull KubernetesCloudBuildWrapper cloud, @Nonnull PodTemplate t, @CheckForNull Label label) {
+    public ProvisioningCallbackProperty(@Nonnull KubernetesCloudProperty cloud, @Nonnull PodTemplate template) {
         this.cloud = cloud;
-        this.t = t;
-        this.label = label;
+        this.template = template;
     }
 
     public Node call() throws Exception {
-        KubernetesSlaveBuildWrapper slave = null;
-        RetentionStrategy retentionStrategy = null;
+        KubernetesSlaveProperty slave = null;
+        RetentionStrategy retentionStrategy = template.getIdleMinutes() == 0 ? new OnceRetentionStrategy(cloud.getRetentionTimeout()) : new CloudRetentionStrategy(template.getIdleMinutes());
         try {
-            if (t.getIdleMinutes() == 0) {
-                retentionStrategy = new OnceRetentionStrategy(cloud.getRetentionTimeout());
-            } else {
-                retentionStrategy = new CloudRetentionStrategy(t.getIdleMinutes());
-            }
-
-            final PodTemplate unwrappedTemplate = PodTemplateUtils.unwrap(cloud.getTemplate(label),
-                    cloud.getDefaultsProviderTemplate(), cloud.getTemplates());
-            slave = new KubernetesSlaveBuildWrapper(unwrappedTemplate, unwrappedTemplate.getName(), cloud,
-                    unwrappedTemplate.getLabel(), retentionStrategy);
-
+            slave = new KubernetesSlaveProperty(template, template.getName(), cloud, template.getLabel(), retentionStrategy);
             LOGGER.log(Level.FINER, "Adding Jenkins node: {0}", slave.getNodeName());
             Jenkins.getInstance().addNode(slave);
 
             KubernetesClient client = cloud.connect();
-            Pod pod = getPodTemplate(slave, unwrappedTemplate);
+            Pod pod = getPodTemplate(slave, template);
 
             String podId = pod.getMetadata().getName();
-            String namespace = Strings.isNullOrEmpty(t.getNamespace()) ? client.getNamespace() : t.getNamespace();
+            String namespace = isNullOrEmpty(template.getNamespace()) ? client.getNamespace() : template.getNamespace();
 
             LOGGER.log(Level.FINE, "Creating Pod: {0} in namespace {1}", new Object[]{podId, namespace});
             pod = client.pods().inNamespace(namespace).create(pod);
             LOGGER.log(Level.INFO, "Created Pod: {0} in namespace {1}", new Object[]{podId, namespace});
 
-            // We need the pod to be running and connected before returning
-            // otherwise this method keeps being called multiple times
             ImmutableList<String> validStates = ImmutableList.of("Running");
 
             int i = 0;
@@ -165,22 +141,18 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
                 LOGGER.log(Level.INFO, "Waiting for Pod to be scheduled ({1}/{2}): {0}", new Object[]{podId, i, j});
                 Thread.sleep(6000);
                 pod = cloud.connect().pods().inNamespace(namespace).withName(podId).get();
-                if (pod == null) {
+                if (isNull(pod)) {
                     throw new IllegalStateException("Pod no longer exists: " + podId);
                 }
-
                 containerStatuses = pod.getStatus().getContainerStatuses();
                 List<ContainerStatus> terminatedContainers = new ArrayList<>();
                 Boolean allContainersAreReady = true;
                 for (ContainerStatus info : containerStatuses) {
-                    if (info != null) {
-                        if (info.getState().getWaiting() != null) {
-                            // Pod is waiting for some reason
-                            LOGGER.log(Level.INFO, "Container is waiting {0} [{2}]: {1}",
-                                    new Object[]{podId, info.getState().getWaiting(), info.getName()});
-                            // break;
+                    if (nonNull(info)) {
+                        if (nonNull(info.getState().getWaiting())) {
+                            LOGGER.log(Level.INFO, "Container is waiting {0} [{2}]: {1}", new Object[]{podId, info.getState().getWaiting(), info.getName()});
                         }
-                        if (info.getState().getTerminated() != null) {
+                        if (nonNull(info.getState().getTerminated())) {
                             terminatedContainers.add(info);
                         } else if (!info.getReady()) {
                             allContainersAreReady = false;
@@ -189,11 +161,8 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
                 }
 
                 if (!terminatedContainers.isEmpty()) {
-                    Map<String, Integer> errors = terminatedContainers.stream().collect(Collectors
-                            .toMap(ContainerStatus::getName, (info) -> info.getState().getTerminated().getExitCode()));
-
-                    // Print the last lines of failed containers
-                    logLastLines(terminatedContainers, podId, namespace, slave, errors);
+                    Map<String, Integer> errors = terminatedContainers.stream()
+                            .collect(Collectors.toMap(ContainerStatus::getName, (info) -> info.getState().getTerminated().getExitCode()));
                     throw new IllegalStateException("Containers are terminated with exit codes: " + errors);
                 }
 
@@ -210,11 +179,11 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
                 throw new IllegalStateException("Container is not running after " + j + " attempts, status: " + status);
             }
 
-            j = t.getSlaveConnectTimeout();
+            j = template.getSlaveConnectTimeout();
 
             // now wait for slave to be online
             for (; i < j; i++) {
-                if (slave.getComputer() == null) {
+                if (isNull(slave.getComputer())) {
                     throw new IllegalStateException("Node was deleted, computer is null");
                 }
                 if (slave.getComputer().isOnline()) {
@@ -224,7 +193,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
                 Thread.sleep(1000);
             }
             if (!slave.getComputer().isOnline()) {
-                if (containerStatuses != null) {
+                if (nonNull(containerStatuses)) {
                     logLastLines(containerStatuses, podId, namespace, slave, null);
                 }
                 throw new IllegalStateException("Slave is not connected after " + j + " attempts, status: " + status);
@@ -233,7 +202,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
             return slave;
         } catch (Throwable ex) {
             LOGGER.log(Level.SEVERE, "Error in provisioning; slave={0}, template={1}: {2}",
-                    new Object[]{slave, t, ex.getMessage()});
+                    new Object[]{slave, template, ex.getMessage()});
             if (slave != null) {
                 LOGGER.log(Level.FINER, "Removing Jenkins node: {0}", slave.getNodeName());
                 Jenkins.getInstance().removeNode(slave);
@@ -245,7 +214,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
     /**
      * Log the last lines of containers logs
      */
-    private void logLastLines(List<ContainerStatus> containers, String podId, String namespace, KubernetesSlaveBuildWrapper slave,
+    private void logLastLines(List<ContainerStatus> containers, String podId, String namespace, KubernetesSlaveProperty slave,
                               Map<String, Integer> errors) {
         for (ContainerStatus containerStatus : containers) {
             String containerName = containerStatus.getName();
@@ -254,12 +223,9 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
                 PrettyLoggable<String, LogWatch> tailingLines = cloud.connect().pods().inNamespace(namespace)
                         .withName(podId).inContainer(containerStatus.getName()).tailingLines(30);
                 String log = tailingLines.getLog();
-                if (!StringUtils.isBlank(log)) {
-                    String msg = errors != null ? String.format(" exited with error %s", errors.get(containerName))
-                            : "";
-                    LOGGER.log(Level.SEVERE,
-                            "Error in provisioning; slave={0}, template={1}. Container {2}{3}. Logs: {4}",
-                            new Object[]{slave, t, containerName, msg, tailingLines.getLog()});
+                if (isNotBlank(log)) {
+                    String msg = nonNull(errors) ? String.format(" exited with error %s", errors.get(containerName)) : "";
+                    LOGGER.log(Level.SEVERE, "Error in provisioning; slave={0}, template={1}. Container {2}{3}. Logs: {4}", new Object[]{slave, template, containerName, msg, tailingLines.getLog()});
                 }
             } catch (UnrecoverableKeyException | CertificateEncodingException | NoSuchAlgorithmException
                     | KeyStoreException | IOException e) {
@@ -268,7 +234,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
         }
     }
 
-    private Container createContainer(KubernetesSlaveBuildWrapper slave, ContainerTemplate containerTemplate, Collection<TemplateEnvVar> globalEnvVars, Collection<VolumeMount> volumeMounts) {
+    private Container createContainer(KubernetesSlaveProperty slave, ContainerTemplate containerTemplate, Collection<TemplateEnvVar> globalEnvVars, Collection<VolumeMount> volumeMounts) {
         // Last-write wins map of environment variable names to values
         HashMap<String, String> env = new HashMap<>();
 
@@ -317,7 +283,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
         envVarsList.addAll(defaultEnvVars);
         EnvVar[] envVars = envVarsList.stream().toArray(EnvVar[]::new);
 
-        List<String> arguments = Strings.isNullOrEmpty(containerTemplate.getArgs()) ? Collections.emptyList()
+        List<String> arguments = isNullOrEmpty(containerTemplate.getArgs()) ? Collections.emptyList()
                 : parseDockerCommand(containerTemplate.getArgs() //
                 .replaceAll(JNLPMAC_REF, slave.getComputer().getJnlpMac()) //
                 .replaceAll(NAME_REF, slave.getComputer().getName()));
@@ -327,7 +293,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
 
         ContainerPort[] ports = containerTemplate.getPorts().stream().map(entry -> entry.toPort()).toArray(size -> new ContainerPort[size]);
 
-        if (!Strings.isNullOrEmpty(containerTemplate.getWorkingDir())
+        if (!isNullOrEmpty(containerTemplate.getWorkingDir())
                 && !PodVolume.volumeMountExists(containerTemplate.getWorkingDir(), volumeMounts)) {
             containerMounts.add(new VolumeMount(containerTemplate.getWorkingDir(), WORKSPACE_VOLUME_NAME, false, null));
         }
@@ -368,12 +334,11 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
     }
 
 
-    private Pod getPodTemplate(KubernetesSlaveBuildWrapper slave, PodTemplate template) {
-        if (template == null) {
+    private Pod getPodTemplate(KubernetesSlaveProperty slave, PodTemplate template) {
+        if (isNull(template)) {
             return null;
         }
 
-        // Build volumes and volume mounts.
         List<Volume> volumes = new ArrayList<>();
         Map<String, VolumeMount> volumeMounts = new HashMap();
 
@@ -410,7 +375,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
         }
 
         List<LocalObjectReference> imagePullSecrets = template.getImagePullSecrets().stream()
-                .map((x) -> x.toLocalObjectReference()).collect(Collectors.toList());
+                .map(PodImagePullSecret::toLocalObjectReference).collect(Collectors.toList());
         return new PodBuilder()
                 .withNewMetadata()
                 .withName(substituteEnv(slave.getNodeName()))
@@ -432,11 +397,11 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
         ImmutableMap.Builder<String, Quantity> builder = ImmutableMap.<String, Quantity>builder();
         String actualMemory = substituteEnv(memory, null);
         String actualCpu = substituteEnv(cpu, null);
-        if (StringUtils.isNotBlank(actualMemory)) {
+        if (isNotBlank(actualMemory)) {
             Quantity memoryQuantity = new Quantity(actualMemory);
             builder.put("memory", memoryQuantity);
         }
-        if (StringUtils.isNotBlank(actualCpu)) {
+        if (isNotBlank(actualCpu)) {
             Quantity cpuQuantity = new Quantity(actualCpu);
             builder.put("cpu", cpuQuantity);
         }
@@ -454,7 +419,7 @@ class ProvisioningCallbackBuildWrapper implements Callable<Node> {
     }
 
     private Map<String, String> getNodeSelectorMap(String selectors) {
-        if (Strings.isNullOrEmpty(selectors)) {
+        if (isNullOrEmpty(selectors)) {
             return ImmutableMap.of();
         } else {
             ImmutableMap.Builder<String, String> builder = ImmutableMap.<String, String>builder();

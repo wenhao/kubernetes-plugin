@@ -26,12 +26,14 @@ import java.security.cert.CertificateEncodingException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import static java.util.Objects.isNull;
+
 /**
  * @author Carlos Sanchez carlos@apache.org
  */
-public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
+public class KubernetesSlaveProperty extends AbstractCloudSlave {
 
-    private static final Logger LOGGER = Logger.getLogger(KubernetesSlaveBuildWrapper.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(KubernetesSlaveProperty.class.getName());
 
     private static final long serialVersionUID = -8642936855413034232L;
 
@@ -42,18 +44,18 @@ public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
     private final static ResourceBundleHolder HOLDER = ResourceBundleHolder.get(Messages.class);
 
     private final String namespace;
-    private KubernetesCloudBuildWrapper cloud;
+    private KubernetesCloudProperty cloud;
 
-    public KubernetesSlaveBuildWrapper(PodTemplate template, String nodeDescription, KubernetesCloudBuildWrapper cloud, String labelStr,
-                                       RetentionStrategy rs)
+    public KubernetesSlaveProperty(PodTemplate template, String nodeDescription, KubernetesCloudProperty cloud, String labelStr,
+                                   RetentionStrategy rs)
             throws Descriptor.FormException, IOException {
         this(template, nodeDescription, labelStr, rs);
         this.cloud = cloud;
     }
 
     @DataBoundConstructor
-    public KubernetesSlaveBuildWrapper(PodTemplate template, String nodeDescription, String labelStr,
-                                       RetentionStrategy rs)
+    public KubernetesSlaveProperty(PodTemplate template, String nodeDescription, String labelStr,
+                                   RetentionStrategy rs)
             throws Descriptor.FormException, IOException {
 
         super(template.getName(),
@@ -83,8 +85,8 @@ public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
 
 
     @Override
-    public KubernetesComputerBuildWrapper createComputer() {
-        return new KubernetesComputerBuildWrapper(this);
+    public KubernetesComputerProperty createComputer() {
+        return new KubernetesComputerProperty(this);
     }
 
     @Override
@@ -92,14 +94,14 @@ public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
         LOGGER.log(Level.INFO, "Terminating Kubernetes instance for agent {0}", name);
 
         Computer computer = toComputer();
-        if (computer == null) {
+        if (isNull(computer)) {
             String msg = String.format("Computer for agent is null: %s", name);
             LOGGER.log(Level.SEVERE, msg);
             listener.fatalError(msg);
             return;
         }
 
-        if (getCloudName() == null) {
+        if (isNull(getCloudName())) {
             String msg = String.format("Cloud name is not set for agent, can't terminate: %s", name);
             LOGGER.log(Level.SEVERE, msg);
             listener.fatalError(msg);
@@ -108,15 +110,15 @@ public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
         }
 
         Cloud cloud = getCloud();
-        if (cloud == null) {
+        if (isNull(cloud)) {
             String msg = String.format("Agent cloud no longer exists: %s", getCloudName());
             LOGGER.log(Level.WARNING, msg);
             listener.fatalError(msg);
             computer.disconnect(OfflineCause.create(new Localizable(HOLDER, "offline")));
             return;
         }
-        if (!(cloud instanceof KubernetesCloudBuildWrapper)) {
-            String msg = String.format("Agent cloud is not a KubernetesCloudBuildWrapper, something is very wrong: %s",
+        if (!(cloud instanceof KubernetesCloudProperty)) {
+            String msg = String.format("Agent cloud is not a KubernetesCloudProperty, something is very wrong: %s",
                     getCloudName());
             LOGGER.log(Level.SEVERE, msg);
             listener.fatalError(msg);
@@ -125,7 +127,7 @@ public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
         }
         KubernetesClient client;
         try {
-            client = ((KubernetesCloudBuildWrapper) cloud).connect();
+            client = ((KubernetesCloudProperty) cloud).connect();
         } catch (UnrecoverableKeyException | CertificateEncodingException | NoSuchAlgorithmException
                 | KeyStoreException e) {
             String msg = String.format("Failed to connect to cloud %s", getCloudName());
@@ -161,7 +163,7 @@ public class KubernetesSlaveBuildWrapper extends AbstractCloudSlave {
 
     @Override
     public String toString() {
-        return String.format("KubernetesSlaveBuildWrapper name: %s", name);
+        return String.format("KubernetesSlaveProperty name: %s", name);
     }
 
     @Extension

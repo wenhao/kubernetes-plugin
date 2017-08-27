@@ -10,7 +10,6 @@ import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
 import com.google.common.base.Preconditions;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
-import hudson.Util;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
 import hudson.model.JobProperty;
@@ -23,10 +22,9 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import jenkins.model.Jenkins;
 import net.sf.json.JSONObject;
-import org.apache.commons.lang.RandomStringUtils;
-import org.apache.commons.lang.StringUtils;
-import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesCloudBuildWrapper;
+import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesCloudProperty;
 import org.csanchez.jenkins.plugins.kubernetes.property.KubernetesLabelAssignmentAction;
+import org.csanchez.jenkins.plugins.kubernetes.property.SlaveNameUtils;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
@@ -36,23 +34,21 @@ import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 import javax.servlet.ServletException;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import static hudson.Util.fixEmpty;
 import static java.lang.String.format;
 import static org.apache.commons.lang.StringUtils.isBlank;
 
-public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
+public class KubernetesJobProperty extends JobProperty<AbstractProject<?, ?>> {
 
     public static final int DEFAULT_MAX_REQUESTS_PER_HOST = 32;
-    private static final Logger LOGGER = Logger.getLogger(KubernetesProperty.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(KubernetesJobProperty.class.getName());
     private static final String PROPERTYNAME = "kubernetes_label_assignment";
     private static final int DEFAULT_RETENTION_TIMEOUT_MINUTES = 5;
-    private static final transient String NAME_FORMAT = "%s-%s";
-    private static final String DEFAULT_AGENT_PREFIX = "jenkins-agent";
     private String name;
     private String defaultsProviderTemplate;
     private PodTemplate template;
@@ -73,11 +69,11 @@ public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
     private int maxRequestsPerHost;
 
     @DataBoundConstructor
-    public KubernetesProperty(String name) {
+    public KubernetesJobProperty(String name) {
         this.name = name;
     }
 
-    public KubernetesProperty(@NonNull KubernetesProperty source) {
+    public KubernetesJobProperty(@NonNull KubernetesJobProperty source) {
         this.name = source.name;
         this.defaultsProviderTemplate = source.defaultsProviderTemplate;
         this.template = source.template;
@@ -89,6 +85,107 @@ public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
         this.containerCap = source.containerCap;
         this.retentionTimeout = source.retentionTimeout;
         this.connectTimeout = source.connectTimeout;
+    }
+
+    public boolean assignLabel(final AbstractProject<?, ?> project, final List<Action> actions) {
+        String slaveName = SlaveNameUtils.getSlaveName(template.getName());
+        template.setName(slaveName);
+        KubernetesCloudProperty kubernetesCloudProperty = new KubernetesCloudProperty(name, template, serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
+        kubernetesCloudProperty.provision(Label.get(template.getLabel()), 1);
+        actions.add(0, new KubernetesLabelAssignmentAction(slaveName));
+        return true;
+    }
+
+    @Extension
+    public static class DescriptorImpl extends JobPropertyDescriptor {
+
+        @Override
+        public String getDisplayName() {
+            return "Kubernetes Build Image";
+        }
+
+        @Override
+        public JobProperty<?> newInstance(final StaplerRequest req, final JSONObject formData) throws FormException {
+            super.newInstance(req, formData);
+            if (formData.isNullObject()) {
+                return null;
+            }
+
+            JSONObject form = formData.getJSONObject(PROPERTYNAME);
+            if (form == null || form.isNullObject()) {
+                return null;
+            }
+
+            @SuppressWarnings("unchecked")
+            Class<? extends KubernetesJobProperty> clazz = (Class<? extends KubernetesJobProperty>) getClass().getEnclosingClass();
+            return req.bindJSON(clazz, form);
+        }
+
+        @SuppressWarnings("all")
+        public FormValidation doTestConnection(@QueryParameter String name, @QueryParameter String serverUrl,
+                                               @QueryParameter String credentialsId,
+                                               @QueryParameter String serverCertificate,
+                                               @QueryParameter boolean skipTlsVerify,
+                                               @QueryParameter String namespace,
+                                               @QueryParameter int connectionTimeout,
+                                               @QueryParameter int readTimeout) throws Exception {
+
+            if (isBlank(serverUrl)) {
+                return FormValidation.error("URL is required");
+            }
+            if (isBlank(name)) {
+                return FormValidation.error("name is required");
+            }
+            if (isBlank(namespace)) {
+                return FormValidation.error("namespace is required");
+            }
+
+            try {
+                KubernetesClient client = new KubernetesFactoryAdapter(serverUrl, namespace, fixEmpty(serverCertificate), fixEmpty(credentialsId), skipTlsVerify, connectionTimeout, readTimeout).createClient();
+                client.pods().list();
+                return FormValidation.ok("Connection successful");
+            } catch (KubernetesClientException e) {
+                LOGGER.log(Level.FINE, format("Error connecting to %s", serverUrl), e);
+                return FormValidation.error("Error connecting to %s: %s", serverUrl, e.getCause() == null
+                        ? e.getMessage()
+                        : format("%s: %s", e.getCause().getClass().getName(), e.getCause().getMessage()));
+            } catch (Exception e) {
+                LOGGER.log(Level.FINE, format("Error connecting to %s", serverUrl), e);
+                return FormValidation.error("Error connecting to %s: %s", serverUrl, e.getMessage());
+            }
+        }
+
+        public ListBoxModel doFillCredentialsIdItems(@QueryParameter String serverUrl) {
+            return new StandardListBoxModel()
+                    .withEmptySelection()
+                    .withMatching(
+                            CredentialsMatchers.anyOf(
+                                    CredentialsMatchers.instanceOf(StandardUsernamePasswordCredentials.class),
+                                    CredentialsMatchers.instanceOf(TokenProducer.class),
+                                    CredentialsMatchers.instanceOf(StandardCertificateCredentials.class)
+                            ),
+                            CredentialsProvider.lookupCredentials(StandardCredentials.class,
+                                    Jenkins.getInstance(),
+                                    ACL.SYSTEM,
+                                    serverUrl != null ? URIRequirementBuilder.fromUri(serverUrl).build()
+                                            : Collections.EMPTY_LIST
+                            ));
+
+        }
+
+        public FormValidation doCheckMaxRequestsPerHostStr(@QueryParameter String value) throws IOException, ServletException {
+            try {
+                Integer.parseInt(value);
+                return FormValidation.ok();
+            } catch (NumberFormatException e) {
+                return FormValidation.error("Please supply an integer");
+            }
+        }
+    }
+
+    @Override
+    public String toString() {
+        return format("KubernetesJobProperty name: %s serverUrl: %s", name, serverUrl);
     }
 
     public int getRetentionTimeout() {
@@ -134,7 +231,7 @@ public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
 
     @DataBoundSetter
     public void setServerCertificate(String serverCertificate) {
-        this.serverCertificate = Util.fixEmpty(serverCertificate);
+        this.serverCertificate = fixEmpty(serverCertificate);
     }
 
     public boolean isSkipTlsVerify() {
@@ -176,7 +273,7 @@ public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
 
     @DataBoundSetter
     public void setJenkinsTunnel(String jenkinsTunnel) {
-        this.jenkinsTunnel = Util.fixEmpty(jenkinsTunnel);
+        this.jenkinsTunnel = fixEmpty(jenkinsTunnel);
     }
 
     public String getCredentialsId() {
@@ -185,7 +282,7 @@ public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
 
     @DataBoundSetter
     public void setCredentialsId(String credentialsId) {
-        this.credentialsId = Util.fixEmpty(credentialsId);
+        this.credentialsId = fixEmpty(credentialsId);
     }
 
     public int getContainerCap() {
@@ -236,120 +333,5 @@ public class KubernetesProperty extends JobProperty<AbstractProject<?, ?>> {
 
     public void setConnectTimeout(int connectTimeout) {
         this.connectTimeout = connectTimeout;
-    }
-
-    public boolean assignLabel(final AbstractProject<?, ?> project, final List<Action> actions) {
-        template.setName(getSlaveName(template.getName()));
-        KubernetesCloudBuildWrapper cloud = new KubernetesCloudBuildWrapper(name, Arrays.asList(template), serverUrl, namespace, jenkinsUrl, containerCap + "", connectTimeout, readTimeout, retentionTimeout);
-        cloud.provision(Label.get(template.getLabel()), 1);
-
-        actions.add(0, new KubernetesLabelAssignmentAction(template.getName()));
-        return true;
-    }
-
-    static String getSlaveName(String name) {
-        String randString = RandomStringUtils.random(5, "bcdfghjklmnpqrstvwxz0123456789");
-        if (StringUtils.isEmpty(name)) {
-            return String.format("%s-%s", DEFAULT_AGENT_PREFIX, randString);
-        }
-        // no spaces
-        name = name.replaceAll("[ _]", "-").toLowerCase();
-        // keep it under 63 chars (62 is used to account for the '-')
-        name = name.substring(0, Math.min(name.length(), 62 - randString.length()));
-        return String.format("%s-%s", name, randString);
-    }
-
-    @Extension
-    public static class DescriptorImpl extends JobPropertyDescriptor {
-
-        @Override
-        public String getDisplayName() {
-            return "Kubernetes Build Image";
-        }
-
-        @Override
-        public JobProperty<?> newInstance(final StaplerRequest req, final JSONObject formData) throws FormException {
-            super.newInstance(req, formData);
-            if (formData.isNullObject()) {
-                return null;
-            }
-
-            JSONObject form = formData.getJSONObject(PROPERTYNAME);
-            if (form == null || form.isNullObject()) {
-                return null;
-            }
-
-            @SuppressWarnings("unchecked")
-            Class<? extends KubernetesProperty> clazz = (Class<? extends KubernetesProperty>) getClass().getEnclosingClass();
-            return req.bindJSON(clazz, form);
-        }
-
-        @SuppressWarnings("all")
-        public FormValidation doTestConnection(@QueryParameter String name, @QueryParameter String serverUrl,
-                                               @QueryParameter String credentialsId,
-                                               @QueryParameter String serverCertificate,
-                                               @QueryParameter boolean skipTlsVerify,
-                                               @QueryParameter String namespace,
-                                               @QueryParameter int connectionTimeout,
-                                               @QueryParameter int readTimeout) throws Exception {
-
-            if (isBlank(serverUrl)) {
-                return FormValidation.error("URL is required");
-            }
-            if (isBlank(name)) {
-                return FormValidation.error("name is required");
-            }
-            if (isBlank(namespace)) {
-                return FormValidation.error("namespace is required");
-            }
-
-            try {
-                KubernetesClient client = new KubernetesFactoryAdapter(serverUrl, namespace,
-                        Util.fixEmpty(serverCertificate), Util.fixEmpty(credentialsId), skipTlsVerify,
-                        connectionTimeout, readTimeout).createClient();
-                client.pods().list();
-                return FormValidation.ok("Connection successful");
-            } catch (KubernetesClientException e) {
-                LOGGER.log(Level.FINE, format("Error connecting to %s", serverUrl), e);
-                return FormValidation.error("Error connecting to %s: %s", serverUrl, e.getCause() == null
-                        ? e.getMessage()
-                        : format("%s: %s", e.getCause().getClass().getName(), e.getCause().getMessage()));
-            } catch (Exception e) {
-                LOGGER.log(Level.FINE, format("Error connecting to %s", serverUrl), e);
-                return FormValidation.error("Error connecting to %s: %s", serverUrl, e.getMessage());
-            }
-        }
-
-        public ListBoxModel doFillCredentialsIdItems(@QueryParameter String serverUrl) {
-            return new StandardListBoxModel()
-                    .withEmptySelection()
-                    .withMatching(
-                            CredentialsMatchers.anyOf(
-                                    CredentialsMatchers.instanceOf(StandardUsernamePasswordCredentials.class),
-                                    CredentialsMatchers.instanceOf(TokenProducer.class),
-                                    CredentialsMatchers.instanceOf(StandardCertificateCredentials.class)
-                            ),
-                            CredentialsProvider.lookupCredentials(StandardCredentials.class,
-                                    Jenkins.getInstance(),
-                                    ACL.SYSTEM,
-                                    serverUrl != null ? URIRequirementBuilder.fromUri(serverUrl).build()
-                                            : Collections.EMPTY_LIST
-                            ));
-
-        }
-
-        public FormValidation doCheckMaxRequestsPerHostStr(@QueryParameter String value) throws IOException, ServletException {
-            try {
-                Integer.parseInt(value);
-                return FormValidation.ok();
-            } catch (NumberFormatException e) {
-                return FormValidation.error("Please supply an integer");
-            }
-        }
-    }
-
-    @Override
-    public String toString() {
-        return format("KubernetesProperty name: %s serverUrl: %s", name, serverUrl);
     }
 }
